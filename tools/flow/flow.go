@@ -145,6 +145,10 @@ type Config struct {
 	// FindHiddenTasks allows tasks to be defined in hidden fields.
 	FindHiddenTasks bool
 
+	// By default, tasks are run concurrently. SynchronousRun causes
+	// tasks to be
+	SynchronousRun bool
+
 	// UpdateFunc is called whenever the information in the controller is
 	// updated. This includes directly after initialization. The task may be
 	// nil if this call is not the result of a task completing.
@@ -236,7 +240,7 @@ func New(cfg *Config, inst cue.InstanceOrValue, f TaskFunc) *Controller {
 		inst:   v,
 		opCtx:  ctx,
 
-		taskCh: make(chan *Task),
+		taskCh: make(chan *Task, 1),
 		keys:   map[string]*Task{},
 		mut:    &sync.Mutex{},
 	}

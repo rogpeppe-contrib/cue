@@ -54,6 +54,7 @@ func (c *Controller) runLoop() {
 
 		// Mark tasks as Ready.
 		for _, t := range c.tasks {
+			t := t
 			switch t.state {
 			case Waiting:
 				waiting = true
@@ -66,13 +67,24 @@ func (c *Controller) runLoop() {
 
 				t.ctxt = eval.NewContext(value.ToInternal(t.v))
 
-				go func(t *Task) {
+				run := func(t *Task) {
 					if err := t.r.Run(t, nil); err != nil {
 						t.err = errors.Promote(err, "task failed")
 					}
+				}
 
-					t.c.taskCh <- t
-				}(t)
+				if c.cfg.SynchronousRun {
+					run(t)
+					if !c.taskDone(t) {
+						return
+					}
+					running = false
+				} else {
+					go func() {
+						run(t)
+						t.c.taskCh <- t
+					}()
+				}
 
 			case Running:
 				running = true
@@ -95,41 +107,48 @@ func (c *Controller) runLoop() {
 			return
 
 		case t := <-c.taskCh:
-			t.state = Terminated
-
-			taskStats := *t.ctxt.Stats()
-			t.stats.Add(taskStats)
-			c.taskStats.Add(taskStats)
-
-			start := *c.opCtx.Stats()
-
-			switch t.err {
-			case nil:
-				c.updateTaskResults(t)
-
-			case ErrAbort:
-				// TODO: do something cleverer.
-				fallthrough
-
-			default:
-				c.addErr(t.err, "task failure")
+			if !c.taskDone(t) {
 				return
 			}
-
-			// Recompute the configuration, if necessary.
-			if c.updateValue() {
-				// initTasks was already called in New to catch initialization
-				// errors earlier.
-				c.initTasks()
-			}
-
-			c.updateTaskValue(t)
-
-			t.stats.Add(c.opCtx.Stats().Since(start))
-
-			c.markReady(t)
 		}
 	}
+}
+
+func (c *Controller) taskDone(t *Task) bool {
+	t.state = Terminated
+
+	taskStats := *t.ctxt.Stats()
+	t.stats.Add(taskStats)
+	c.taskStats.Add(taskStats)
+
+	start := *c.opCtx.Stats()
+
+	switch t.err {
+	case nil:
+		c.updateTaskResults(t)
+
+	case ErrAbort:
+		// TODO: do something cleverer.
+		fallthrough
+
+	default:
+		c.addErr(t.err, "task failure")
+		return false
+	}
+
+	// Recompute the configuration, if necessary.
+	if c.updateValue() {
+		// initTasks was already called in New to catch initialization
+		// errors earlier.
+		c.initTasks()
+	}
+
+	c.updateTaskValue(t)
+
+	t.stats.Add(c.opCtx.Stats().Since(start))
+
+	c.markReady(t)
+	return true
 }
 
 func (c *Controller) markReady(t *Task) {
